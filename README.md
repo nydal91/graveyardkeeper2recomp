@@ -21,6 +21,7 @@ Bring-up on a Snapdragon 8 Gen 2 phone (RedMagic 8 Pro, Adreno 740, Android 15) 
 | Wide screens | Unity's Matrix4x4f::SetOrtho / SetPerspective are byte-for-byte the same code as in Nine Sols / T2D, so the same hooks apply (gen.py `POST_HOOKS`, main `0x700095d730`, `0x700095d610`). GetScreenResolution takes its out-pointers in x1/x2 here, so it is left unhooked: the wide view comes from the two camera hooks and the renderer's widened 16:9 targets. Verified on the 2480x1116 phone: title, menus and gameplay fill the screen with correct proportions; with `wide_view = 0` the same screens fall back to a centred 16:9 picture with bars (`scripts/ini_set.sh wide_view 0`). Gameplay verified past the opening: dialogue advance, movement and camera follow, pause menu, HUD anchoring, full-width dim overlays. The opening's first dialogue lines render over a fade-from-black and input stays locked until ~44 advances incl. its choice menus (`scripts/intro_skip.sh`) - both are the game's own intro, not faults |
 | Present crop | GK renders a 1280x720 display into 1920x1080 window textures and presents a crop (`nvnWindowSetCrop`). The viewport mapping of draws into the presented texture and the present's source rectangle follow that crop (`nvn_window_crop`, exec.c / device.c); without it the image lands letterboxed in a corner of the wide window |
 | Scene targets | `SCENE_LINES` (`nvn/output_scale.c`) is 540: k=2 for GK's 640x360 pixel-art world, which the game blits 2x into its 1280x720 display (the present crop). At k=2 the world's backing size equals the crop's, so that blit is 1:1 and sprites keep their edges (verified against k=1 crops on the phone); at k=1 the world is filtered twice and smears. No measurable fill-rate cost on the Adreno 740 (same 44-62 ms worst frames, 30 fps). `SAVAGEWIND_LOG_RS=1` logs the render-target sizes the game makes (`[rs]` lines) for tuning other games |
+| Frame rate | Unity boots GK at 30 fps: its player loop waits for vsync events until its frame interval has passed - the pace object behind main `0x7007a73670` holds vSyncCount 2 at +0 and the interval as a float (1/30 s) at +0xc. gen.py exports that slot as the site `unity_frame_pace` (build `2d29e899e84e1854`); `framepace_guest_tick()` (`hle/framepace.c`) rewrites both from the Frame rate setting (Settings > Video, default 60; `frame_rate =` in `savagewind.ini`, `off` = no limit) once per vsync tick, and above 60 the vi vsync event itself comes faster (`hle/vi.c`), since the guest waits whole events. Verified on the phone: 60.0 fps on the title (worst frame 18 ms), 58.4 avg in gameplay (p50 16.7 ms), 30.0 at `frame_rate = 30`, 118.5 at 120; a 4 s walk covers the same ground at 60 and 30 - the game times its logic by the clock, so a higher rate is smoothness, not speed. Games without the site keep the previous pacing |
 | Unity 6 fixes | inherited from the T2D port: `svcGetInfo` 23/24 (IsApplication, FreeThreadCount); `nn::hid::Set/GetNpadJoyHoldType` HLE; `nvnCommandBufferBindProgram(NULL, stages)` only clears unused stages |
 | GPU driver | Turnip v27.0.0-R1 verified loading and rendering (Mesa 27.0.0-devel, ASTC by the GPU). AdrenoTools zip in `Android/data/<pkg>/files/drivers`, chosen in Settings or `gpu_driver =` in `savagewind.ini`. Push zips with `scripts/install_driver.sh` (adb-created files are shell-owned and invisible to the app until their ownership is fixed) |
 
@@ -36,7 +37,8 @@ scripts/build_gamelib_host.sh --push    # game code on this PC with the NDK, the
 
 Put your dump as `exefs/` and `romfs/` in the repository root (both git-ignored). The native dependencies
 (`app/src/main/cpp/deps`, `jniLibs`, the bundled clang assets) come from `scripts/build_deps_android.sh`. A rebuilt APK
-can change the GAMELIB_ID. If it does, run `build_gamelib_host.sh --push` again; it only relinks.
+can change the GAMELIB_ID. If it does, run `build_gamelib_host.sh --push` again; it regenerates and recompiles
+only the chunks whose text changed (a generator change alone rebuilds `layout.c` and the entry object).
 
 On the device the game files live in `/storage/emulated/0/Android/data/io.github.graveyardkeeperrecomp/files/extracted/`,
 and the runtime log is `savagewind.log` one level up. To boot past the launcher (tests):
@@ -44,6 +46,8 @@ and the runtime log is `savagewind.log` one level up. To boot past the launcher 
 `scripts/devrun.sh` and `scripts/ctl.sh` (control socket on 7777: `press a 6`, `stick l 1 0 60`, `shot <name>`) work
 as in the Nine Sols / T2D ports, plus `debugframe` (dump the next frame's passes as `build/pass_<frame>_NNN.png`;
 needs `SAVAGEWIND_GPU_OVERLAP=0`, range filters `SAVAGEWIND_DEBUG_PASS_FROM/TO`, `SAVAGEWIND_DEBUG_MAIN_ONLY`).
+`SAVAGEWIND_LOG_SLEEP=1` / `SAVAGEWIND_LOG_VSYNC=1` log the guest's SleepThread / WaitSynchronization call sites
+with their rates and blocked times (how the 30 fps cap was found: the vsync ticker's wait, not the present).
 `scripts/ini_set.sh key value` edits the device's `savagewind.ini` keeping the app's ownership of the inode
 (a replaced inode on FUSE storage becomes invisible to the app); `scripts/intro_skip.sh` advances the opening
 dialogue. The wide-view fallback is `wide_view = 0` (centred 16:9 with bars). `SAVAGEWIND_UNITY_ASPECT` /

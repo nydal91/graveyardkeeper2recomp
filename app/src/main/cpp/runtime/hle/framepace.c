@@ -164,7 +164,9 @@ int framepace_target(void) {
     // finds no scene image in its frames): with it switched on the game drew 120 and ran twice as fast.
     // SAVAGEWIND_FPS still forces one (tests).
     extern volatile int g_fg_active;
-    if (forced < 0) fps = fps > 60 && g_fg_active ? fps : 60;
+    // (Unity games whose pace object we drive - unity_frame_pace - time their logic by the clock: the setting stands
+    // as chosen, below 60 too. The rest keep MvDK's rule above.)
+    if (forced < 0 && !g_site.unity_frame_pace) fps = fps > 60 && g_fg_active ? fps : 60;
     if (movie != 0 && __atomic_load_n(&g_movie_playing, __ATOMIC_RELAXED) > 0) {
         int cap = movie > 0 ? movie : g_movie_fps;
         if (fps == 0 || fps > cap) fps = cap;
@@ -209,6 +211,22 @@ uint64_t framepace_period_ns(void) {
     double fps = target > 0 ? target : FPS_CEILING, cap = vsync_cap();
     if (cap > 0 && fps > cap) fps = cap;
     return (uint64_t)((g_fg_active ? 2e9 : 1e9) / on_refresh(fps) + 0.5);
+}
+
+// Unity's own frame pace (Graveyard Keeper, site unity_frame_pace): the object behind the slot holds vSyncCount at
+// +0 and the frame interval in seconds at +0xc (float). The player loop waits for vsync events until that interval
+// has passed, so the game boots at 30 fps (1/30 s, 2 vsyncs) whatever the present pace does. Follow the frame rate
+// setting here instead, once per vsync tick (hle/vi.c); above 60 fps the tick itself comes faster too.
+void framepace_guest_tick(void) {
+    if (!framepace_on()) return;
+    uint64_t slot = g_site.unity_frame_pace;
+    if (!slot) return;
+    uint64_t pace = *(uint64_t *)(uintptr_t)slot;
+    if (!pace) return;
+    int fps = framepace_target();
+    if (fps <= 0) fps = 120;  // (no limit: the guest may run up to the present pace's ceiling)
+    *(uint32_t *)(uintptr_t)pace = fps >= 60 ? 1 : 2;
+    *(float *)(uintptr_t)(pace + 0xc) = 1.0f / (float)fps;
 }
 
 // The frame loop's vsync wait: the present keeps the pace instead (1: skipped; 0: the game's own wait).

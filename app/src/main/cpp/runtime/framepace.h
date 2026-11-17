@@ -10,6 +10,9 @@ int framepace_target(void);
 uint64_t framepace_period_ns(void);
 // false: the game paces itself and keeps its own clock (SAVAGEWIND_FRAMEPACE=0)
 bool framepace_on(void);
+// Unity's frame pace object (site unity_frame_pace): vSyncCount and frame interval follow the frame rate setting.
+// Called once per vsync tick (hle/vi.c); games without the site: nothing.
+void framepace_guest_tick(void);
 // An event is running: a cutscene, a talk, an item fanfare (the game's event manager has an active event)
 bool framepace_in_event(void);
 // The start screen or one of its menus is up (a 16:9 layout over pictures of its own)

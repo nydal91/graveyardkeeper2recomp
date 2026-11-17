@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "../framepace.h"
 #include "../hle.h"
 #include "../kernel.h"
 
@@ -12,10 +13,18 @@ uint64_t g_native_window;
 
 static void *vsync_thread(void *arg) {
     (void)arg;
-    const uint64_t period = 16666667;
-    plat_thread_realtime(period);
-    uint64_t next = plat_now_ns();
+    uint64_t next = plat_now_ns(), period = 0;
     for (;;) {
+        // The display's 60 Hz, or the frame rate setting above it: Unity's player loop waits for these events until
+        // its frame interval has passed, so at 90/120 fps the events must come that much faster too (framepace.c
+        // sets the interval; with a 60 Hz tick a 1/120 s interval would still wait a whole vsync).
+        int fps = framepace_target();
+        uint64_t hz = fps > 60 ? (uint64_t)fps : fps > 0 ? 60 : 120;  // (no limit: the guest interval is 1/120 s)
+        uint64_t want = 1000000000ull / hz;
+        if (want != period) {
+            period = want;
+            plat_thread_realtime(period);
+        }
         next += period;
         plat_sleep_until_ns(next);
         uint64_t now = plat_now_ns();
@@ -27,6 +36,7 @@ static void *vsync_thread(void *arg) {
         klock();
         kernel_signal(vsync_event);
         pthread_mutex_unlock(&g_klock);
+        framepace_guest_tick();
     }
     return NULL;
 }

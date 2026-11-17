@@ -19,6 +19,7 @@
     X(player_info)             /* uking::act::PlayerInfo * (test tools) */                                              \
     X(world_mgr)               /* ksys::world::Manager * (test tools) */                                                \
     X(main_data)               /* main's .data (then .bss, up to main_end) */                                           \
+    X(unity_frame_pace)        /* Unity frame pace *: +0 vSyncCount (u32), +0xc frame interval (s, float) */             \
     X(main_end)
 
 typedef struct {

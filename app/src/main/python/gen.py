@@ -746,7 +746,10 @@ def main_sites(nso, base, opts):
     if not opts.no_sites and nso.build_id[:16] not in {v.build_id for v in game_sites.VERSIONS}:
         opts.no_sites = True  # (MvDK: not a BotW build: none of its sites, none of its patches)
     if opts.no_sites:  # (MvDK: still the two sites without a pattern, where main's .data starts and its image ends)
-        return '', {'main_data': base + nso.data[0], 'main_end': base + nso.size}
+        sites = {'main_data': base + nso.data[0], 'main_end': base + nso.size}
+        if nso.build_id[:16] == '2d29e899e84e1854':  # Graveyard Keeper: the pointer slot of Unity's frame pace object
+            sites['unity_frame_pace'] = base + 0x7a73670
+        return '', sites
     return game_sites.for_module(nso, base, opts.any_version, lambda s: print(s, file=sys.stderr))
 
 

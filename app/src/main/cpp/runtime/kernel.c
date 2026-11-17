@@ -1064,6 +1064,32 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
     case 0x0A: longjmp(t_cur->unwind, 1);  // ExitThread: back to thread_main, which signals the thread object
     case 0x0B: {  // SleepThread (in slices of at most 50 ms: a reboot doesn't wait out a long sleep)
         int64_t ns = (int64_t)x[0];
+        if (ns > 500000) {  // (debugging) SAVAGEWIND_LOG_SLEEP=1: who sleeps, once per (site, caller), with totals
+            static int on = -1;
+            if (on < 0) on = getenv("SAVAGEWIND_LOG_SLEEP") != NULL;
+            static struct { uint64_t lr, clr, tot, t0; unsigned cnt; } seen[64];
+            static unsigned nseen;
+            if (on && nseen < 64) {
+                uint64_t clr = 0;  // one frame up: sleep wrappers aggregate all their callers under one lr
+                if (x[29] >= 0x7000000000ull && x[29] < 0x7400000000ull)
+                    clr = *(const uint64_t *)(uintptr_t)(x[29] + 8);
+                unsigned i = 0;
+                while (i < nseen && (seen[i].lr != x[30] || seen[i].clr != clr)) i++;
+                if (i == nseen) {
+                    seen[i].lr = x[30]; seen[i].clr = clr; seen[i].t0 = plat_now_ns(); nseen++;
+                    LOG("[sleep] site %.2f ms lr %#llx caller %#llx\n", ns / 1e6,
+                        (unsigned long long)x[30], (unsigned long long)clr);
+                }
+                if (i < nseen) {
+                    seen[i].tot += (uint64_t)ns;
+                    if (++seen[i].cnt % 240 == 0)
+                        LOG("[sleep] lr %#llx caller %#llx %u sleeps avg %.2f ms (%.1f/s)\n",
+                            (unsigned long long)seen[i].lr, (unsigned long long)seen[i].clr, seen[i].cnt,
+                            seen[i].tot / 1e6 / seen[i].cnt,
+                            seen[i].cnt * 1000.0 / ((plat_now_ns() - seen[i].t0) / 1e6));
+                }
+            }
+        }
         if (ns <= 0) { core_yield(t_cur); break; }
         core_release(t_cur);
         for (uint64_t end = plat_now_ns() + (uint64_t)ns, now; !g_rt_unwind && (now = plat_now_ns()) < end;) {
@@ -1160,9 +1186,42 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         x[0] = R_OK;
         break;
     case 0x18: {  // WaitSynchronization(_, handles, count, timeout)
+        int wi = -1;
+        uint64_t w0 = 0;
+        static struct { uint64_t lr, clr, t0, tot; unsigned cnt; int64_t to; uint32_t h0; } s[24];
+        static unsigned ns_;
+        {   // (debugging) SAVAGEWIND_LOG_VSYNC=1: every WaitSynchronization site, its rate and timeout
+            static int on = -1;
+            if (on < 0) on = getenv("SAVAGEWIND_LOG_VSYNC") != NULL;
+            if (on) {
+                w0 = plat_now_ns();
+                uint64_t clr = (x[29] >= 0x7000000000ull && x[29] < 0x7400000000ull)
+                             ? *(const uint64_t *)(uintptr_t)(x[29] + 8) : 0;
+                unsigned i = 0;
+                while (i < ns_ && (s[i].lr != x[30] || s[i].clr != clr)) i++;
+                if (i == ns_ && ns_ < 24) {
+                    s[i].lr = x[30]; s[i].clr = clr; s[i].t0 = plat_now_ns(); s[i].cnt = 0;
+                    s[i].to = (int64_t)x[3];
+                    s[i].h0 = (int32_t)x[2] > 0 ? *(const uint32_t *)(uintptr_t)x[1] : 0;
+                    ns_++;
+                    LOG("[wait] site lr %#llx caller %#llx timeout %lld h0 %x\n",
+                        (unsigned long long)x[30], (unsigned long long)clr, (long long)s[i].to, s[i].h0);
+                }
+                if (i < ns_) {
+                    wi = (int)i;
+                    if (++s[i].cnt % 120 == 0) {
+                        double ms = (plat_now_ns() - s[i].t0) / 1e6;
+                        LOG("[wait] lr %#llx caller %#llx %u waits %.1f/s blocked avg %.2f ms\n",
+                            (unsigned long long)s[i].lr, (unsigned long long)s[i].clr, s[i].cnt,
+                            s[i].cnt * 1000.0 / ms, s[i].tot / 1e6 / s[i].cnt);
+                    }
+                }
+            }
+        }
         int32_t idx = -1;
         x[0] = svc_wait_synchronization(x[1], (int32_t)x[2], (int64_t)x[3], &idx);
         x[1] = (uint32_t)idx;
+        if (wi >= 0) s[wi].tot += plat_now_ns() - w0;
         break;
     }
     case 0x19: {  // CancelSynchronization
